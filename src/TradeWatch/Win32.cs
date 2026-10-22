@@ -2,7 +2,7 @@ using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace MtgoTradeAutomations.TradeWatch;
+namespace MtgoTradeAutomation.TradeWatch;
 
 internal static class Win32
 {

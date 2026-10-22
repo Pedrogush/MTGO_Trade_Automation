@@ -1,4 +1,4 @@
-# MTGO Trade Automations SDK
+# MTGO Trade Automation
 
 > **Unofficial.** Not affiliated with, endorsed by, or associated with Wizards of
 > the Coast or the [videre-project](https://github.com/videre-project) / MTGOSDK.

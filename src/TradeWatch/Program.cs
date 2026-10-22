@@ -25,7 +25,7 @@ using MTGOSDK.API.Chat;
 using MTGOSDK.API.Collection;
 using MTGOSDK.API.Trade;
 using MTGOSDK.API.Trade.Enums;
-using MtgoTradeAutomations.TradeWatch;
+using MtgoTradeAutomation.TradeWatch;
 
 var outDir = ArgValue(args, "--out") ?? Path.Combine("investigation", DateTime.Now.ToString("yyyyMMdd-HHmmss"));
 var heartbeat = TimeSpan.FromMilliseconds(int.Parse(ArgValue(args, "--heartbeat-ms") ?? "0"));

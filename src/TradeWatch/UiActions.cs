@@ -5,7 +5,7 @@ using FlaUI.Core.Conditions;
 using FlaUI.Core.Definitions;
 using FlaUI.UIA3;
 
-namespace MtgoTradeAutomations.TradeWatch;
+namespace MtgoTradeAutomation.TradeWatch;
 
 /// <summary>
 /// The POC's only way to change anything in MTGO. Buttons are clicked through

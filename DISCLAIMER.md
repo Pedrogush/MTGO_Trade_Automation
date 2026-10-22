@@ -1,6 +1,6 @@
 # Disclaimer
 
-**MTGO Trade Automations SDK is an independent, unofficial project.**
+**MTGO Trade Automation is an independent, unofficial project.**
 
 - It is **not affiliated with, endorsed, sponsored, or approved by Wizards of the
   Coast LLC**, Daybreak Game Company LLC, or Hasbro, Inc. Magic: The Gathering,

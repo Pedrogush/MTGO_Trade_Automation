@@ -9,7 +9,7 @@ using FlaUI.Core.EventHandlers;
 using FlaUI.UIA3;
 using MTGOSDK.API.Trade.Enums;
 
-namespace MtgoTradeAutomations.TradeWatch;
+namespace MtgoTradeAutomation.TradeWatch;
 
 /// <summary>
 /// Dry-run locator: on an SDK state change, finds the control the automation

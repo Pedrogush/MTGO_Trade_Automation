@@ -6,7 +6,7 @@ using MTGOSDK.API.Trade;
 using MTGOSDK.API.Trade.Enums;
 using ChatChannel = MTGOSDK.API.Chat.Channel;
 
-namespace MtgoTradeAutomations.TradeWatch;
+namespace MtgoTradeAutomation.TradeWatch;
 
 /// <summary>
 /// Proof-of-concept rental agent. For a whitelisted partner it accepts the
