@@ -1,0 +1,25 @@
+{
+  "$comment": "Template only. Copy to config/trade-config.local.json (gitignored) and fill it in yourself. Every account you list is YOUR attestation that it belongs to that service: this project never ships or curates bot lists.",
+  "schemaVersion": 1,
+  "me": "<your MTGO username>",
+  "allowNameOnlyAccounts": false,
+  "services": [
+    {
+      "name": "<rental service name>",
+      "accounts": [
+        {
+          "name": "<bot account name>",
+          "id": null,
+          "$comment": "id = the numeric MTGO user id (TradeWatch logs it as partnerId). A known id is authoritative: the account is matched by id and a different id using this name is refused. id null means name-only: refused unless allowNameOnlyAccounts is true, and then pinned to the first id seen with that name (config/trust-pins.local.json), so later trades are matched by id."
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "maxItemLinesPerTrade": 75,
+    "maxCardsPerTrade": 100,
+    "maxTradesPerHour": 10
+  },
+  "allowNonCardItems": false,
+  "dryRun": true
+}

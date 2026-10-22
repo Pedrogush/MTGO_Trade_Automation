@@ -1,0 +1,13 @@
+MTGO Trade Automations SDK
+Copyright (c) 2026 MTGO Trade Automations SDK Contributors
+
+This project depends on the following third-party software:
+
+* MTGOSDK (https://github.com/videre-project/MTGOSDK)
+  Copyright (c) 2024, Cory Bennett. Licensed under the Apache License 2.0.
+  Consumed unmodified as a NuGet package dependency.
+
+* uiautomation / Python-UIAutomation-for-Windows
+  (https://github.com/yinkaisheng/Python-UIAutomation-for-Windows)
+  Licensed under the Apache License 2.0.
+  Consumed unmodified as a PyPI dependency.

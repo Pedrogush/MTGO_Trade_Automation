@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows7.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>MtgoTradeAutomations.TradeWatch</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Latest release; published from videre-project/MTGOSDK head 903a481c (2026-10-18). -->
+    <PackageReference Include="MTGOSDK" Version="1.8.0.20261018" />
+    <PackageReference Include="FlaUI.UIA3" Version="5.0.0" />
+  </ItemGroup>
+
+</Project>

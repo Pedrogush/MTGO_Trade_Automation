@@ -1,0 +1,20 @@
+# Captured investigation sessions contain account names, chat and collection data
+investigation/
+
+# .NET
+bin/
+obj/
+*.user
+.vs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# Local config (whitelists, ledgers) — never commit
+config.local.*
+*.local.json
+ledger*.jsonl
+docs/investigation.md
