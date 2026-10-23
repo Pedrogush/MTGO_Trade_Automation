@@ -33,10 +33,16 @@ public sealed class TradeAgent
     private readonly UiActions _ui;
     private readonly Action<string, object> _emit;
     private readonly CancellationToken _ct;
+    // Bounded so queued closures can never keep an unbounded number of MTGO objects pinned.
+    // A trade produces a few dozen events, so the bound is only reached if the reader is stuck.
     private readonly System.Threading.Channels.Channel<Action> _events =
-        System.Threading.Channels.Channel.CreateUnbounded<Action>(new() { SingleReader = true });
+        System.Threading.Channels.Channel.CreateBounded<Action>(new System.Threading.Channels.BoundedChannelOptions(1000)
+        {
+            SingleReader = true,
+            FullMode = System.Threading.Channels.BoundedChannelFullMode.DropOldest,
+        });
     private readonly List<DateTimeOffset> _accepted = [];
-    private Session? _session;
+    private volatile Session? _session;
 
     public TradeAgent(TradeConfig config, TrustStore trust, Ledger ledger, UiActions ui, Action<string, object> emit, CancellationToken ct)
     {
@@ -75,7 +81,13 @@ public sealed class TradeAgent
             }
         });
 
-    public void OnChat(ChatChannel channel, Message message) =>
+    public void OnChat(ChatChannel channel, Message message)
+    {
+        // Without a trade in progress, chat is not even queued (a queued closure keeps its pins).
+        if (_session is not { Done: false })
+        {
+            return;
+        }
         _events.Writer.TryWrite(() =>
         {
             // No remote reads for chat unless a trade is in progress.
@@ -94,6 +106,7 @@ public sealed class TradeAgent
             }
             s.Pulse();
         });
+    }
 
     private void HandleState(TradeEscrow trade, TradeState oldState, TradeState newState)
     {
@@ -300,6 +313,9 @@ public sealed class TradeAgent
         finally
         {
             s.Done = true;
+            // Drop the finished session so its TradeEscrow proxy (and the pins it
+            // holds in MTGO) can be collected.
+            Interlocked.CompareExchange(ref _session, null, s);
         }
     }
 

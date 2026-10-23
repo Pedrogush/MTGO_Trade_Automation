@@ -75,6 +75,7 @@ void Emit(string kind, object data)
 }
 
 using var cts = new CancellationTokenSource();
+var exitCode = 0;
 Console.CancelKeyPress += (_, e) =>
 {
     e.Cancel = true;
@@ -100,6 +101,7 @@ uiProbe?.WarmUp();
 
 using var uiActions = act ? new UiActions(Client.ProcessId, Emit) : null;
 TradeAgent? agent = null;
+var pendingTrade = false;
 if (config is not null)
 {
     var me = client.CurrentUser?.Name;
@@ -119,53 +121,27 @@ if (config is not null)
         && Safe(() => (TradeState?)open.State) is TradeState.InviteReceived or TradeState.NegotiateNoDeposit or TradeState.ApprovalNone)
     {
         agent.Resume(open, open.State);
+        pendingTrade = true;
     }
     Emit("agentArmed", new { config = configPath, me, services = config.Services.Select(s => new { s.Name, accounts = s.Accounts.Count }) });
 }
 
 // SDK hooks fire on callback threads. Handlers only enqueue the raw objects;
 // every remote read happens on the worker below so a slow read never stalls a hook.
-var queue = System.Threading.Channels.Channel.CreateUnbounded<Func<(string Kind, object Data)>>(new UnboundedChannelOptions { SingleReader = true });
+// The queue is bounded: if the worker ever falls behind, the oldest work is dropped
+// (and counted) instead of queued closures keeping MTGO objects pinned without limit.
+var droppedWork = 0L;
+var queue = System.Threading.Channels.Channel.CreateBounded<Func<(string Kind, object Data)>>(
+    new BoundedChannelOptions(1000) { SingleReader = true, FullMode = BoundedChannelFullMode.DropOldest },
+    _ => Interlocked.Increment(ref droppedWork));
 var tradeChannelIds = new HashSet<int>();
 
 void Enqueue(Func<(string, object)> work) => queue.Writer.TryWrite(work);
 
-TradeManager.TradeStarted += new Action<TradeEscrow, bool>((trade, isTrade) =>
-    Enqueue(() => ("tradeStarted", new { isPlayerTrade = isTrade, trade = SnapshotTrade(trade) })));
-
-TradeManager.TradeStateChanged += new Action<TradeEscrow, (TradeState OldState, TradeState NewState)>((trade, change) =>
-{
-    // The probe uses only the enum values carried by the hook, so it starts
-    // without waiting behind any remote read of the escrow.
-    uiProbe?.OnStateChanged(change.Item1, change.Item2);
-    agent?.OnStateChanged(trade, change.Item1, change.Item2);
-    Enqueue(() => ("tradeStateChanged", new
-    {
-        oldState = change.Item1.ToString(),
-        newState = change.Item2.ToString(),
-        // Equal states mean MTGO refreshed the offered items without a lifecycle change.
-        // The item hooks already carry those lists, so refreshes only read the counts.
-        itemsRefreshOnly = change.Item1 == change.Item2,
-        trade = change.Item1 == change.Item2 ? SnapshotCounts(trade) : SnapshotTrade(trade),
-    }));
-});
-
-TradeManager.TradeError += new Action<TradeEscrow?, TradeError>((trade, error) =>
-    Enqueue(() => ("tradeError", new { error = error.ToString(), trade = trade is null ? null : SnapshotTrade(trade) })));
-
-TradeEscrow.SendTradeItemUpdate += new Action<TradeEscrow, IList<CardQuantityPair>>((trade, items) =>
-{
-    agent?.OnItemsChanged(trade);
-    Enqueue(() => ("localItemsUpdate", new { tradeId = Safe(() => (int?)trade.Id), items = SnapshotPairs(items) }));
-});
-
-TradeEscrow.ReceiveTradeItemUpdate += new Action<TradeEscrow, IList<CardQuantityPair>>((trade, items) =>
-{
-    agent?.OnItemsChanged(trade);
-    Enqueue(() => ("partnerItemsUpdate", new { tradeId = Safe(() => (int?)trade.Id), items = SnapshotPairs(items) }));
-});
-
-ChatChannel.MessageReceived += new Action<ChatChannel, Message>((channel, message) =>
+// Every hook invocation pins its arguments inside MTGO until our proxies are
+// finalized. The chat hook fires for every message in every channel, so it is
+// attached only while a trade is open (or always with --all-chat).
+var chatHook = new Action<ChatChannel, Message>((channel, message) =>
 {
     agent?.OnChat(channel, message);
     Enqueue(() =>
@@ -194,8 +170,113 @@ ChatChannel.MessageReceived += new Action<ChatChannel, Message>((channel, messag
         });
     });
 });
+var chatGate = new object();
+var chatSubscribed = false;
 
-Emit("subscribed", new { hooks = new[] { "TradeStarted", "TradeStateChanged", "TradeError", "SendTradeItemUpdate", "ReceiveTradeItemUpdate", "MessageReceived" } });
+// Subscribing and unsubscribing patch MTGO, so this runs off the hook thread.
+void SetChatHook(bool on) => Task.Run(() =>
+{
+    lock (chatGate)
+    {
+        on |= allChat;
+        if (on == chatSubscribed)
+        {
+            return;
+        }
+        try
+        {
+            if (on)
+            {
+                ChatChannel.MessageReceived += chatHook;
+            }
+            else
+            {
+                ChatChannel.MessageReceived -= chatHook;
+            }
+            chatSubscribed = on;
+            Emit("chatHook", new { subscribed = on });
+        }
+        catch (Exception ex)
+        {
+            Emit("chatHookError", new { subscribe = on, error = ex.GetType().Name, message = ex.Message });
+        }
+    }
+});
+
+var tradeStartedHook = new Action<TradeEscrow, bool>((trade, isTrade) =>
+{
+    SetChatHook(true);
+    Enqueue(() => ("tradeStarted", new { isPlayerTrade = isTrade, trade = SnapshotTrade(trade) }));
+});
+
+var tradeStateHook = new Action<TradeEscrow, (TradeState OldState, TradeState NewState)>((trade, change) =>
+{
+    // The probe uses only the enum values carried by the hook, so it starts
+    // without waiting behind any remote read of the escrow.
+    uiProbe?.OnStateChanged(change.Item1, change.Item2);
+    agent?.OnStateChanged(trade, change.Item1, change.Item2);
+    if (change.Item2 == TradeState.InviteReceived)
+    {
+        SetChatHook(true);
+    }
+    Enqueue(() => ("tradeStateChanged", new
+    {
+        oldState = change.Item1.ToString(),
+        newState = change.Item2.ToString(),
+        // Equal states mean MTGO refreshed the offered items without a lifecycle change.
+        // The item hooks already carry those lists, so refreshes only read the counts.
+        itemsRefreshOnly = change.Item1 == change.Item2,
+        trade = change.Item1 == change.Item2 ? SnapshotCounts(trade) : SnapshotTrade(trade),
+    }));
+    if (change.Item2 == TradeState.Closed)
+    {
+        // Queued after the snapshot above: forget the trade's chat channel, drop
+        // the chat hook, and let the finished escrow's pins go.
+        Enqueue(() =>
+        {
+            lock (tradeChannelIds)
+            {
+                tradeChannelIds.Clear();
+            }
+            SetChatHook(false);
+            ReleasePins();
+            return ("chatIgnored", new { });
+        });
+    }
+});
+
+var tradeErrorHook = new Action<TradeEscrow?, TradeError>((trade, error) =>
+    Enqueue(() => ("tradeError", new { error = error.ToString(), trade = trade is null ? null : SnapshotTrade(trade) })));
+
+var sendItemsHook = new Action<TradeEscrow, IList<CardQuantityPair>>((trade, items) =>
+{
+    agent?.OnItemsChanged(trade);
+    Enqueue(() => ("localItemsUpdate", new { tradeId = Safe(() => (int?)trade.Id), items = SnapshotPairs(items) }));
+});
+
+var receiveItemsHook = new Action<TradeEscrow, IList<CardQuantityPair>>((trade, items) =>
+{
+    agent?.OnItemsChanged(trade);
+    Enqueue(() => ("partnerItemsUpdate", new { tradeId = Safe(() => (int?)trade.Id), items = SnapshotPairs(items) }));
+});
+
+TradeManager.TradeStarted += tradeStartedHook;
+TradeManager.TradeStateChanged += tradeStateHook;
+TradeManager.TradeError += tradeErrorHook;
+TradeEscrow.SendTradeItemUpdate += sendItemsHook;
+TradeEscrow.ReceiveTradeItemUpdate += receiveItemsHook;
+if (allChat || pendingTrade)
+{
+    SetChatHook(true);
+}
+
+Emit("subscribed", new { hooks = new[] { "TradeStarted", "TradeStateChanged", "TradeError", "SendTradeItemUpdate", "ReceiveTradeItemUpdate", "MessageReceived (while a trade is open)" } });
+
+// Pins in MTGO are released only when our proxies are finalized, and this
+// process allocates too little for the GC to run on its own. Collect on a timer
+// (cheap: our heap is a few MB) and log both sides' memory so growth is visible.
+using var pinTimer = new Timer(_ => ReleasePins(), null, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(60));
+using var memoryTimer = new Timer(_ => ReportMemory(), null, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(5));
 
 var worker = Task.Run(async () =>
 {
@@ -276,8 +357,93 @@ try
 catch (OperationCanceledException)
 {
 }
+// Remove our patches from MTGO before the client is disposed, which unregisters
+// it so the diver drops this client's pins at once. (After a hard kill the
+// diver's own client monitor cleans up within about 10 s.)
+foreach (var unhook in new Action[]
+{
+    () => TradeManager.TradeStarted -= tradeStartedHook,
+    () => TradeManager.TradeStateChanged -= tradeStateHook,
+    () => TradeManager.TradeError -= tradeErrorHook,
+    () => TradeEscrow.SendTradeItemUpdate -= sendItemsHook,
+    () => TradeEscrow.ReceiveTradeItemUpdate -= receiveItemsHook,
+    () =>
+    {
+        lock (chatGate)
+        {
+            if (chatSubscribed)
+            {
+                ChatChannel.MessageReceived -= chatHook;
+                chatSubscribed = false;
+            }
+        }
+    },
+})
+{
+    try
+    {
+        unhook();
+    }
+    catch
+    {
+    }
+}
 Emit("detached", new { });
-return 0;
+return exitCode;
+
+void ReleasePins()
+{
+    GC.Collect();
+    GC.WaitForPendingFinalizers();
+    GC.Collect();
+}
+
+void ReportMemory()
+{
+    try
+    {
+        using var self = System.Diagnostics.Process.GetCurrentProcess();
+        var privateMb = Math.Round(self.PrivateMemorySize64 / 1048576.0, 1);
+        // One round trip into MTGO's diver: its pin count and MTGO's managed heap.
+        var diver = MTGOSDK.Core.Remoting.RemoteClient.GetDiverDiagnostics();
+        var host = diver?.HostProcess;
+        Emit("memory", new
+        {
+            self = new
+            {
+                privateMb,
+                gcHeapMb = Math.Round(GC.GetTotalMemory(false) / 1048576.0, 1),
+                handles = self.HandleCount,
+                threads = self.Threads.Count,
+                droppedWork = Interlocked.Read(ref droppedWork),
+            },
+            mtgo = host is null ? null : new
+            {
+                pinnedObjects = host.PinnedObjects,
+                ourPins = diver!.ClientPinReferences?.GetValueOrDefault(Environment.ProcessId),
+                managedHeapMb = Math.Round(host.GcTotalMemory / 1048576.0, 1),
+                gen2Mb = Math.Round(host.Gen2HeapSize / 1048576.0, 1),
+                lohMb = Math.Round(host.LohSize / 1048576.0, 1),
+                gen2Collections = host.GcGen2Collections,
+                activeHooks = diver.ActiveHooks,
+                eventSubscriptions = diver.ActiveEventSubscriptions,
+                connectedClients = diver.ConnectedClients,
+            },
+        });
+        // Guard rail: this process should never grow. If it does, exit cleanly
+        // (which releases all of its pins in MTGO) instead of growing further.
+        if (privateMb > 300 || self.HandleCount > 5000)
+        {
+            Emit("selfCheckExit", new { privateMb, handles = self.HandleCount });
+            exitCode = 3;
+            cts.Cancel();
+        }
+    }
+    catch (Exception ex)
+    {
+        Emit("memoryError", new { error = ex.GetType().Name, message = ex.Message });
+    }
+}
 
 object SnapshotTrade(TradeEscrow trade)
 {

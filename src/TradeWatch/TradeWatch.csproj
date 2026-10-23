@@ -6,7 +6,15 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>MtgoTradeAutomation.TradeWatch</RootNamespace>
+    <!-- A long-lived watcher: workstation GC without background threads, and a hard
+         ceiling so a leak fails fast instead of eating the machine's memory. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
   </PropertyGroup>
+
+  <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.GC.HeapHardLimit" Value="268435456" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- Latest release; published from videre-project/MTGOSDK head 903a481c (2026-10-18). -->
